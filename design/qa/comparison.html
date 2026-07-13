@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>theNanGuos visual QA comparison</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 24px; background: #182035; color: #fff; font: 14px system-ui, sans-serif; }
+    h1 { margin: 0 0 20px; }
+    section { margin: 0 0 30px; }
+    h2 { margin: 0 0 10px; font-size: 18px; }
+    .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+    figure { margin: 0; padding: 10px; background: #fff; color: #182035; border-radius: 8px; }
+    figcaption { margin-bottom: 8px; font-weight: 700; }
+    img { display: block; width: 100%; aspect-ratio: 1440 / 1024; object-fit: fill; border: 1px solid #d8deea; }
+  </style>
+</head>
+<body>
+  <h1>theNanGuos 1440×1024 视觉对照</h1>
+  <main>
+    <section><h2>01 创作页</h2><div class="pair"><figure><figcaption>原型</figcaption><img src="../prototypes/01-create.png" /></figure><figure><figcaption>实现</figcaption><img src="01-create-implemented.png" /></figure></div></section>
+    <section><h2>02 等待页</h2><div class="pair"><figure><figcaption>原型</figcaption><img src="../prototypes/02-generating.png" /></figure><figure><figcaption>实现</figcaption><img src="02-generating-implemented.png" /></figure></div></section>
+    <section><h2>03 结果页</h2><div class="pair"><figure><figcaption>原型</figcaption><img src="../prototypes/03-result.png" /></figure><figure><figcaption>实现</figcaption><img src="03-result-implemented.png" /></figure></div></section>
+    <section><h2>04 作品页</h2><div class="pair"><figure><figcaption>原型</figcaption><img src="../prototypes/04-works.png" /></figure><figure><figcaption>实现</figcaption><img src="04-works-implemented.png" /></figure></div></section>
+    <section><h2>05 偏好页</h2><div class="pair"><figure><figcaption>原型</figcaption><img src="../prototypes/05-preferences.png" /></figure><figure><figcaption>实现</figcaption><img src="05-preferences-implemented.png" /></figure></div></section>
+  </main>
+</body>
+</html>
