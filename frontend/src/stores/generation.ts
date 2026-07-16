@@ -1,5 +1,5 @@
 import { defineStore } from 'pinia'
-import { api, type Generation } from '../api/client'
+import { api, type Generation, type GenerationPreview } from '../api/client'
 
 export type DefaultField = 'language' | 'instrumental' | 'vocal_gender' | 'suno_model'
 export interface GenerationSettings extends Record<string, unknown> {
@@ -8,6 +8,7 @@ export interface GenerationSettings extends Record<string, unknown> {
   vocal_gender: string
   suno_model: string
   title: string
+  retentionLimit?: 1 | 2 | null
   negativeTags?: string
   styleWeight?: number
   weirdnessConstraint?: number
@@ -15,9 +16,10 @@ export interface GenerationSettings extends Record<string, unknown> {
 }
 
 export function buildGenerationPayload(input: { prompt: string; settings: GenerationSettings; savedFields: DefaultField[] }) {
-  const { title, negativeTags, styleWeight, weirdnessConstraint, audioWeight, ...base } = input.settings
+  const { title, retentionLimit = 1, negativeTags, styleWeight, weirdnessConstraint, audioWeight, ...base } = input.settings
   return {
     prompt: input.prompt.trim(),
+    retention_limit: retentionLimit,
     overrides: {
       ...base,
       ...(title.trim() ? { title: title.trim() } : {}),
@@ -65,8 +67,20 @@ export function estimatedGenerationProgress(stage: string, backendProgress: numb
 }
 
 export const useGenerationStore = defineStore('generation', {
-  state: () => ({ current: null as Generation | null, items: [] as Generation[], loading: false, error: '' }),
+  state: () => ({ current: null as Generation | null, currentPreview: null as GenerationPreview | null, previewPrompt: '', items: [] as Generation[], loading: false, previewLoading: false, error: '' }),
   actions: {
+    async loadPreview(payload: { prompt: string; overrides: Record<string, unknown> }) {
+      this.previewLoading = true; this.error = ''
+      try {
+        this.currentPreview = await api.createPreview(payload)
+        this.previewPrompt = payload.prompt
+        return this.currentPreview
+      } catch (error) {
+        this.error = error instanceof Error ? error.message : '创作方案生成失败'
+        throw error
+      } finally { this.previewLoading = false }
+    },
+    clearPreview() { this.currentPreview = null; this.previewPrompt = '' },
     async create(payload: ReturnType<typeof buildGenerationPayload>) {
       this.loading = true; this.error = ''
       try { return await api.createGeneration(payload) } catch (error) { this.error = error instanceof Error ? error.message : '提交失败'; throw error } finally { this.loading = false }
@@ -79,5 +93,10 @@ export const useGenerationStore = defineStore('generation', {
     },
     async stop(id: string) { await api.stopWaiting(id); await this.load(id) },
     async resume(id: string) { await api.resumePolling(id); await this.load(id) },
+    async remove(id: string) {
+      this.error = ''
+      try { await api.deleteGeneration(id); this.items = this.items.filter(item => item.request_id !== id) }
+      catch (error) { this.error = error instanceof Error ? error.message : '删除失败'; throw error }
+    },
   },
 })

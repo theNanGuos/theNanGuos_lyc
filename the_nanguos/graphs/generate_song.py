@@ -11,7 +11,9 @@ from .state import GraphState
 
 NODE_ORDER = (
     "init_run",
+    "retrieve_initial_knowledge",
     "conductor",
+    "retrieve_knowledge",
     "lyrics",
     "music_planner",
     "arrangement",

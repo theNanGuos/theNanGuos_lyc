@@ -8,6 +8,8 @@ __pycache__/
 frontend/node_modules/
 frontend/dist/
 frontend/coverage/
+frontend/test-results/
+frontend/playwright-report/
 frontend/*.tsbuildinfo
 frontend/vite.config.js
 frontend/vite.config.d.ts
@@ -17,9 +19,13 @@ outputs/*
 !outputs/.gitkeep
 memory/user_profile.json
 memory/style_preferences.md
+knowledge/_index/
 
 # Root project documents stay local; README is the only tracked root Markdown.
 /*.md
 !/README.md
+
+# Unapproved documentation drafts stay local; formal docs/ Markdown is tracked.
+/docs/_drafts/
 
 7-Agent-lab.pdf

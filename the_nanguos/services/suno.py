@@ -23,9 +23,9 @@ class SunoPollingStopped(SunoError): pass
 
 
 class SunoClient:
-    def __init__(self, *, api_key: str, base_url: str = "https://api.sunoapi.org", http_client: httpx.AsyncClient | None = None, request_timeout: float = 30) -> None:
+    def __init__(self, *, api_key: str, base_url: str = "https://api.kie.ai", http_client: httpx.AsyncClient | None = None, request_timeout: float = 30) -> None:
         if not api_key:
-            raise ValueError("SUNO_API_KEY is required")
+            raise ValueError("KIE_API_KEY is required (legacy SUNO_API_KEY is also supported)")
         self._api_key = api_key
         self._base_url = base_url.rstrip("/")
         self._http = http_client
@@ -46,9 +46,12 @@ class SunoClient:
         status = data["status"]
         if status not in IN_PROGRESS | FAILED | {"SUCCESS"}:
             raise SunoProtocolError(f"unknown Suno status: {status}")
-        if status in FAILED:
-            raise SunoTaskFailed(task_id, status)
+        if status in IN_PROGRESS:
+            return SunoTaskDetails(task_id=data.get("taskId") or task_id, status=status)
         raw_audio = data.get("response", {}).get("sunoData") if isinstance(data.get("response"), dict) else None
+        callback_result_available = status == "CALLBACK_EXCEPTION" and isinstance(raw_audio, list) and bool(raw_audio)
+        if status in FAILED and not callback_result_available:
+            raise SunoTaskFailed(task_id, status)
         if status == "SUCCESS" and (not isinstance(raw_audio, list) or not raw_audio):
             raise SunoProtocolError("SUCCESS response contains no sunoData")
         audio = [SunoAudio.model_validate(item) for item in (raw_audio or [])]
@@ -72,7 +75,9 @@ class SunoClient:
                 result = on_update(details)
                 if hasattr(result, "__await__"):
                     await result
-            if details.status == "SUCCESS":
+            if details.status == "SUCCESS" or (
+                details.status == "CALLBACK_EXCEPTION" and details.audio_results
+            ):
                 return details
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -100,7 +105,7 @@ class SunoClient:
                 if not isinstance(data, dict):
                     raise SunoProtocolError("Suno response must be a JSON object")
                 return data
-            except (httpx.ConnectError, httpx.TimeoutException, httpx.HTTPStatusError) as exc:
+            except (httpx.ConnectError, httpx.TimeoutException, httpx.RemoteProtocolError, httpx.HTTPStatusError) as exc:
                 if isinstance(exc, httpx.HTTPStatusError) and exc.response.status_code < 500 and exc.response.status_code != 429:
                     raise
                 transient = exc

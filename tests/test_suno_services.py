@@ -7,6 +7,8 @@ import httpx
 import pytest
 
 from the_nanguos.schemas import SunoRequest
+from the_nanguos.services import runtime as runtime_module
+from the_nanguos.services.jobs import GenerationRecord
 from the_nanguos.services.storage import ArtifactStore, UnsafeMediaUrlError
 from the_nanguos.services.suno import SunoClient, SunoProtocolError, SunoTaskFailed
 
@@ -53,6 +55,163 @@ def test_failure_states_are_terminal(status: str) -> None:
     assert caught.value.status == status
 
 
+def test_callback_failure_with_generated_audio_is_recovered_by_polling() -> None:
+    async def handler(req):
+        return httpx.Response(200, json={"data": {
+            "taskId": "x",
+            "status": "CALLBACK_EXCEPTION",
+            "response": {"sunoData": [{
+                "id": "a1",
+                "audioUrl": "https://cdn.example/a.mp3",
+                "imageUrl": "https://cdn.example/a.jpeg",
+                "title": "Recovered",
+            }]},
+        }})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            return await SunoClient(api_key="x", http_client=http).poll(
+                "x", interval_seconds=0, timeout_seconds=1
+            )
+
+    details = asyncio.run(run())
+    assert details.status == "CALLBACK_EXCEPTION"
+    assert details.audio_results[0].title == "Recovered"
+
+
+def test_in_progress_details_ignore_incomplete_kie_candidates() -> None:
+    async def handler(req):
+        return httpx.Response(200, json={"data": {
+            "taskId": "x",
+            "status": "FIRST_SUCCESS",
+            "response": {"sunoData": [{
+                "id": "partial",
+                "audioUrl": "",
+                "streamAudioUrl": "",
+                "imageUrl": "",
+                "sourceAudioUrl": None,
+                "sourceStreamAudioUrl": "https://source.example/partial",
+                "sourceImageUrl": "https://source.example/partial.jpeg",
+                "createTime": 1_700_000_000_000,
+                "title": "Partial",
+            }]},
+        }})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            return await SunoClient(api_key="x", http_client=http).get_details("x")
+
+    details = asyncio.run(run())
+    assert details.status == "FIRST_SUCCESS"
+    assert details.audio_results == []
+
+
+def test_kie_success_accepts_source_urls_and_epoch_milliseconds() -> None:
+    async def handler(req):
+        return httpx.Response(200, json={"data": {
+            "taskId": "x",
+            "status": "SUCCESS",
+            "response": {"sunoData": [{
+                "id": "complete",
+                "audioUrl": "https://cdn.example/complete.mp3",
+                "streamAudioUrl": "https://cdn.example/complete",
+                "imageUrl": "https://cdn.example/complete.jpeg",
+                "sourceAudioUrl": "https://source.example/complete.mp3",
+                "sourceStreamAudioUrl": "https://source.example/complete",
+                "sourceImageUrl": "https://source.example/complete.jpeg",
+                "createTime": 1_700_000_000_000,
+                "title": "Complete",
+            }]},
+        }})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            return await SunoClient(api_key="x", http_client=http).get_details("x")
+
+    audio = asyncio.run(run()).audio_results[0]
+    assert audio.create_time == "2023-11-14T22:13:20+00:00"
+    assert str(audio.source_audio_url) == "https://source.example/complete.mp3"
+
+
+def test_remote_protocol_disconnect_is_retried() -> None:
+    attempts = 0
+
+    async def handler(req):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.RemoteProtocolError("server disconnected", request=req)
+        return httpx.Response(200, json={"data": {"taskId": "x", "status": "PENDING"}})
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            return await SunoClient(api_key="x", http_client=http).get_details("x")
+
+    assert asyncio.run(run()).status == "PENDING"
+    assert attempts == 2
+
+
+def test_environment_runner_prefers_kie_configuration(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    monkeypatch.setenv("KIE_API_KEY", "kie-token")
+    monkeypatch.setenv("KIE_BASE_URL", "https://api.kie.test")
+    monkeypatch.setenv("KIE_CALLBACK_URL", "https://callback.invalid/kie/suno")
+    monkeypatch.setenv("SUNO_API_KEY", "legacy-token")
+    monkeypatch.setenv("SUNO_BASE_URL", "https://legacy.invalid")
+    monkeypatch.setenv("SUNO_CALLBACK_URL", "https://legacy.invalid/callback")
+
+    def fake_suno_client(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    class FakeService:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __call__(self, record):
+            return None
+
+    monkeypatch.setattr(runtime_module, "SunoClient", fake_suno_client)
+    monkeypatch.setattr(runtime_module, "DeepSeekLLMClient", lambda **kwargs: object())
+    monkeypatch.setattr(runtime_module, "GenerationService", FakeService)
+    record = GenerationRecord(request_id="kie-config", user_request="test")
+
+    asyncio.run(runtime_module.environment_runner(outputs_dir=tmp_path)(record))
+
+    assert captured == {"api_key": "kie-token", "base_url": "https://api.kie.test"}
+    assert record.options["callback_url"] == "https://callback.invalid/kie/suno"
+
+
+def test_environment_runner_keeps_legacy_suno_configuration_compatible(monkeypatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    for name in ("KIE_API_KEY", "KIE_BASE_URL", "KIE_CALLBACK_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("SUNO_API_KEY", "legacy-token")
+    monkeypatch.setenv("SUNO_BASE_URL", "https://legacy.example")
+    monkeypatch.setenv("SUNO_CALLBACK_URL", "https://legacy.invalid/callback")
+
+    def fake_suno_client(**kwargs):
+        captured.update(kwargs)
+        return object()
+
+    class FakeService:
+        def __init__(self, **kwargs):
+            pass
+
+        async def __call__(self, record):
+            return None
+
+    monkeypatch.setattr(runtime_module, "SunoClient", fake_suno_client)
+    monkeypatch.setattr(runtime_module, "DeepSeekLLMClient", lambda **kwargs: object())
+    monkeypatch.setattr(runtime_module, "GenerationService", FakeService)
+    record = GenerationRecord(request_id="legacy-config", user_request="test")
+
+    asyncio.run(runtime_module.environment_runner(outputs_dir=tmp_path)(record))
+
+    assert captured == {"api_key": "legacy-token", "base_url": "https://legacy.example"}
+    assert record.options["callback_url"] == "https://legacy.invalid/callback"
+
+
 def test_poll_deadline_bounds_request_retries() -> None:
     calls = 0
     async def handler(req):
@@ -96,6 +255,35 @@ def test_media_download_requires_recorded_https_and_is_atomic(tmp_path: Path) ->
             with pytest.raises(UnsafeMediaUrlError):
                 await store.download_media("r1", "audio", "a2", "http://evil/a.mp3", allowed_urls={"http://evil/a.mp3"})
     asyncio.run(run())
+
+
+def test_media_download_retries_protocol_disconnect(tmp_path: Path) -> None:
+    attempts = 0
+
+    async def handler(req):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise httpx.RemoteProtocolError("server disconnected", request=req)
+        return httpx.Response(200, content=b"complete", headers={"content-type": "audio/mpeg"})
+
+    async def public_resolver(hostname, port):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", port))]
+
+    async def run():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            store = ArtifactStore(tmp_path, http_client=http, resolver=public_resolver)
+            return await store.download_media(
+                "r1",
+                "audio",
+                "a1",
+                "https://cdn.example/a.mp3",
+                allowed_urls={"https://cdn.example/a.mp3"},
+            )
+
+    path = asyncio.run(run())
+    assert path.read_bytes() == b"complete"
+    assert attempts == 2
 
 
 @pytest.mark.parametrize("url", [

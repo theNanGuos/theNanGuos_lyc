@@ -1,7 +1,7 @@
 import { setActivePinia, createPinia } from 'pinia'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import { buildGenerationPayload, generationStatusCopy, isTerminalGenerationStatus, normalizeGenerationStatus } from '../src/stores/generation'
+import { buildGenerationPayload, generationStatusCopy, isTerminalGenerationStatus, normalizeGenerationStatus, useGenerationStore } from '../src/stores/generation'
 import * as generationHelpers from '../src/stores/generation'
 import { usePlayerStore } from '../src/stores/player'
 import { demoGeneration, sortGenerations } from '../src/data/demo'
@@ -11,13 +11,25 @@ describe('generation helpers', () => {
   it('only persists explicitly selected default fields', () => {
     expect(buildGenerationPayload({
       prompt: '深夜学习的中文 lo-fi',
-      settings: { language: 'zh', instrumental: false, vocal_gender: 'f', suno_model: 'V5', title: '深夜微光', negativeTags: '重鼓点', styleWeight: .7, weirdnessConstraint: .3, audioWeight: .5 },
+      settings: { language: 'zh', instrumental: false, vocal_gender: 'f', suno_model: 'V5', retentionLimit: 2, title: '深夜微光', negativeTags: '重鼓点', styleWeight: .7, weirdnessConstraint: .3, audioWeight: .5 },
       savedFields: ['language', 'vocal_gender', 'suno_model'],
     })).toEqual({
       prompt: '深夜学习的中文 lo-fi',
+      retention_limit: 2,
       overrides: { language: 'zh', instrumental: false, vocal_gender: 'f', suno_model: 'V5', title: '深夜微光', negative_tags: '重鼓点', style_weight: .7, weirdness_constraint: .3, audio_weight: .5 },
       save_defaults: ['language', 'vocal_gender', 'suno_model'],
     })
+  })
+
+  it('defaults local candidate retention to one without adding a Suno override', () => {
+    const payload = buildGenerationPayload({
+      prompt: 'warm pop',
+      settings: { language: 'zh', instrumental: false, vocal_gender: 'f', suno_model: 'V5', title: '' },
+      savedFields: [],
+    })
+
+    expect(payload.retention_limit).toBe(1)
+    expect(payload.overrides).not.toHaveProperty('retention_limit')
   })
 
   it('omits an empty optional title from generation overrides', () => {
@@ -85,6 +97,22 @@ describe('player store', () => {
     expect(player.currentTime).toBe(0)
     player.toggle()
     expect(player.playing).toBe(false)
+  })
+})
+
+describe('generation deletion', () => {
+  beforeEach(() => setActivePinia(createPinia()))
+
+  it('removes a generation from the local list only after the API succeeds', async () => {
+    const fetchMock = vi.fn(async () => new Response(null, { status: 204 }))
+    vi.stubGlobal('fetch', fetchMock)
+    const store = useGenerationStore()
+    store.items = [demoGeneration('demo-a')!]
+
+    await store.remove('demo-a')
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/generations/demo-a', expect.objectContaining({ method: 'DELETE' }))
+    expect(store.items).toEqual([])
   })
 })
 

@@ -28,6 +28,19 @@ def test_suno_request_validates_mode_limits_and_weights() -> None:
         SunoRequest(customMode=True, instrumental=True, model="V4", callBackUrl="https://example.com/callback", style="x" * 201, title="Title", styleWeight=1.1)
 
 
+def test_kie_limits_titles_to_80_characters_for_every_model() -> None:
+    for model in ("V4", "V4_5", "V4_5PLUS", "V4_5ALL", "V5", "V5_5"):
+        with pytest.raises(ValidationError):
+            SunoRequest(
+                customMode=True,
+                instrumental=True,
+                model=model,
+                callBackUrl="https://callback.invalid/kie/suno",
+                style="ambient",
+                title="x" * 81,
+            )
+
+
 def test_song_spec_and_audio_validate_boundaries() -> None:
     spec = SongSpec(title="Night", language="zh", genre="lo-fi", mood=["warm"], duration_seconds=90, structure=["intro", "verse"])
     assert spec.vocal.enabled is True

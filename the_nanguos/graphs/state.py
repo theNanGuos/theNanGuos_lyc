@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from the_nanguos.knowledge import KnowledgeContext, KnowledgeWarning
 from the_nanguos.schemas import (
     ArrangementResult,
     CollaborationLog,
@@ -39,3 +40,6 @@ class GraphState(BaseModel):
     polling_stopped: bool = False
     errors: list[dict[str, Any]] = Field(default_factory=list)
     collaboration_log: CollaborationLog | None = None
+    initial_knowledge_context: KnowledgeContext | None = None
+    knowledge_context: KnowledgeContext | None = None
+    knowledge_warnings: list[KnowledgeWarning] = Field(default_factory=list)

@@ -4,6 +4,7 @@ from .models import (
     CollaborationLog,
     ConductorResult,
     LyricsResult,
+    KnowledgeLog,
     GlobalArrangement,
     MusicPlanResult,
     ScorePlan,
@@ -22,7 +23,7 @@ from .models import (
 
 __all__ = [
     "ArrangementResult", "CollaborationLog", "CollaborationStep", "ConductorResult", "LyricsResult",
-    "GlobalArrangement", "SunoLog", "SunoModel", "ValidationLog", "ScoreSection",
+    "GlobalArrangement", "KnowledgeLog", "SunoLog", "SunoModel", "ValidationLog", "ScoreSection",
     "MusicPlanResult", "ScorePlan", "SongSpec", "SunoAudio", "SunoRequest",
     "SunoTaskDetails", "TaskPlan", "TaskStep", "UserProfile",
 ]

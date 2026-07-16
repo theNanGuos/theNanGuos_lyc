@@ -8,6 +8,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Awaitable, Callable
 
+from the_nanguos.schemas import SongSpec, TaskPlan
+from the_nanguos.services.storage import ArtifactStore
+
 
 @dataclass
 class GenerationRecord:
@@ -19,13 +22,48 @@ class GenerationRecord:
     task_id: str | None = None
     error: dict[str, object] | None = None
     candidates: list[dict[str, object]] = field(default_factory=list)
+    stage_events: list[dict[str, object]] = field(default_factory=list)
     options: dict[str, object] = field(default_factory=dict)
+    retention_limit: int | None = 1
+    approved_song_spec: SongSpec | None = field(default=None, repr=False)
+    approved_task_plan: TaskPlan | None = field(default=None, repr=False)
     created_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = field(default_factory=lambda: datetime.now(UTC).isoformat())
     stop_event: asyncio.Event = field(default_factory=asyncio.Event, repr=False)
 
+    def __post_init__(self) -> None:
+        if not self.stage_events:
+            self.stage_events.append(
+                {
+                    "stage": self.stage,
+                    "status": self.status,
+                    "progress": self.progress,
+                    "at": self.updated_at,
+                }
+            )
+
+    def transition(self, *, status: str | None = None, stage: str, progress: int) -> None:
+        timestamp = datetime.now(UTC).isoformat()
+        if status is not None:
+            self.status = status
+        self.stage = stage
+        self.progress = progress
+        self.updated_at = timestamp
+        event = {
+            "stage": self.stage,
+            "status": self.status,
+            "progress": self.progress,
+            "at": timestamp,
+        }
+        if self.stage_events and self.stage_events[-1]["stage"] == stage:
+            self.stage_events[-1] = event
+        else:
+            self.stage_events.append(event)
+
     def public(self) -> dict[str, object]:
-        return {"request_id": self.request_id, "user_request": self.user_request, "status": self.status, "stage": self.stage, "progress": self.progress, "task_id": self.task_id, "error": self.error, "candidates": self.candidates, "created_at": self.created_at, "updated_at": self.updated_at}
+        safe_setting_names = ("language", "instrumental", "vocal_gender", "suno_model")
+        settings = {name: self.options[name] for name in safe_setting_names if name in self.options}
+        return {"request_id": self.request_id, "user_request": self.user_request, "status": self.status, "stage": self.stage, "progress": self.progress, "task_id": self.task_id, "error": self.error, "candidates": self.candidates, "settings": settings, "retention_limit": self.retention_limit, "stage_events": self.stage_events, "created_at": self.created_at, "updated_at": self.updated_at}
 
 
 Runner = Callable[[GenerationRecord], Awaitable[None]]
@@ -61,8 +99,12 @@ class TaskRegistry:
                         "audio_url": f"/api/generations/{request_id}/audio/{audio_id}",
                         "download_url": f"/api/generations/{request_id}/audio/{audio_id}/download",
                         "cover_url": f"/api/generations/{request_id}/cover/{audio_id}",
+                        "model_name": item.get("modelName"),
+                        "tags": item.get("tags"),
+                        "create_time": item.get("createTime"),
                     })
-                self.records[request_id] = GenerationRecord(request_id=request_id, user_request=log.get("user_request_summary", ""), status=status, stage=stage, progress=progress, task_id=suno.get("task_id"), candidates=candidates)
+                retention_limit = suno.get("retention_limit") if "retention_limit" in suno else None
+                self.records[request_id] = GenerationRecord(request_id=request_id, user_request=log.get("user_request_summary", ""), status=status, stage=stage, progress=progress, task_id=suno.get("task_id"), candidates=candidates, retention_limit=retention_limit)
             except (OSError, ValueError, KeyError, TypeError):
                 continue
 
@@ -71,6 +113,17 @@ class TaskRegistry:
         if self.runner is not None:
             self.tasks[record.request_id] = asyncio.create_task(self._run(record))
 
+    async def delete(self, request_id: str) -> None:
+        record = self.records.get(request_id)
+        if record is None:
+            raise KeyError(request_id)
+        task = self.tasks.get(request_id)
+        if record.status in {"queued", "running"} or (task is not None and not task.done()):
+            raise RuntimeError("active generation cannot be deleted")
+        await asyncio.to_thread(ArtifactStore(self.outputs_dir).delete_request, request_id)
+        self.records.pop(request_id, None)
+        self.tasks.pop(request_id, None)
+
     async def _run(self, record: GenerationRecord) -> None:
         try:
             await self.runner(record)
@@ -78,7 +131,7 @@ class TaskRegistry:
             raise
         except Exception as exc:
             if record.status != "stopped":
-                record.status, record.stage, record.progress = "failed", "failed", 100
+                record.transition(status="failed", stage="failed", progress=100)
                 record.error = {"code": type(exc).__name__, "message": str(exc)}
                 self._persist_failure(record)
         finally:

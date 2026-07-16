@@ -7,11 +7,12 @@ import os
 import uuid
 from pathlib import Path
 
+from the_nanguos.config import load_project_env
 from the_nanguos.llm import DeepSeekLLMClient
 from the_nanguos.memory import PreferenceStore
 from the_nanguos.services.generation import GenerationService
 from the_nanguos.services.jobs import GenerationRecord
-from the_nanguos.services.runtime import environment_runner
+from the_nanguos.services.runtime import environment_runner, suno_environment
 from the_nanguos.services.storage import ArtifactStore
 
 
@@ -28,7 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
 async def _generate(args: argparse.Namespace) -> dict[str, object]:
     if not args.prompt: raise SystemExit("prompt is required unless --api is used")
     request_id = args.request_id or uuid.uuid4().hex
-    options = {"callback_url": os.environ.get("SUNO_CALLBACK_URL", "https://local.invalid/suno-callback"), "suno_model": os.environ.get("SUNO_MODEL", "V5")}
+    provider = suno_environment()
+    options = {"callback_url": provider["callback_url"], "suno_model": os.environ.get("SUNO_MODEL", "V5")}
     record = GenerationRecord(request_id=request_id, user_request=args.prompt, options=options)
     if args.no_submit:
         llm = DeepSeekLLMClient(api_key=os.environ.get("DEEPSEEK_API_KEY", ""), base_url=os.environ.get("DEEPSEEK_BASE_URL", "https://api.deepseek.com"), model=os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro"))
@@ -39,6 +41,7 @@ async def _generate(args: argparse.Namespace) -> dict[str, object]:
 
 
 def main() -> None:
+    load_project_env()
     args = build_parser().parse_args()
     if args.api:
         import uvicorn

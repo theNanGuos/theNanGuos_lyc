@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated, Literal
 
-from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, model_validator
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from the_nanguos.knowledge import KnowledgeReference, KnowledgeWarning
 
 
 class StrictModel(BaseModel):
@@ -187,7 +190,7 @@ class SunoRequest(StrictModel):
                 raise ValueError("non-custom mode only accepts prompt as creative content")
         prompt_limit = 500 if not self.custom_mode else (3000 if self.model == SunoModel.V4 else 5000)
         style_limit = 200 if self.model == SunoModel.V4 else 1000
-        title_limit = 80 if self.model in (SunoModel.V4, SunoModel.V4_5ALL) else 100
+        title_limit = 80
         if self.prompt and len(self.prompt) > prompt_limit:
             raise ValueError(f"prompt exceeds {prompt_limit} characters")
         if self.style and len(self.style) > style_limit:
@@ -202,6 +205,9 @@ class SunoAudio(StrictModel):
     audio_url: AnyHttpUrl = Field(alias="audioUrl")
     stream_audio_url: AnyHttpUrl | None = Field(default=None, alias="streamAudioUrl")
     image_url: AnyHttpUrl | None = Field(default=None, alias="imageUrl")
+    source_audio_url: AnyHttpUrl | None = Field(default=None, alias="sourceAudioUrl")
+    source_stream_audio_url: AnyHttpUrl | None = Field(default=None, alias="sourceStreamAudioUrl")
+    source_image_url: AnyHttpUrl | None = Field(default=None, alias="sourceImageUrl")
     prompt: str | None = None
     model_name: str | None = Field(default=None, alias="modelName")
     title: str
@@ -209,9 +215,26 @@ class SunoAudio(StrictModel):
     create_time: str | None = Field(default=None, alias="createTime")
     duration: float | None = Field(default=None, ge=0)
 
+    @field_validator("create_time", mode="before")
+    @classmethod
+    def normalize_epoch_milliseconds(cls, value: object) -> object:
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            try:
+                return datetime.fromtimestamp(value / 1000, UTC).isoformat()
+            except (OSError, OverflowError, ValueError) as exc:
+                raise ValueError("createTime milliseconds are out of range") from exc
+        return value
+
     @model_validator(mode="after")
     def require_https(self) -> "SunoAudio":
-        for url in (self.audio_url, self.stream_audio_url, self.image_url):
+        for url in (
+            self.audio_url,
+            self.stream_audio_url,
+            self.image_url,
+            self.source_audio_url,
+            self.source_stream_audio_url,
+            self.source_image_url,
+        ):
             if url is not None and url.scheme != "https":
                 raise ValueError("Suno media URLs must use HTTPS")
         return self
@@ -251,6 +274,9 @@ class SunoLog(StrictModel):
     task_id: str | None = None
     status: str | None = None
     audio_results: list[SunoAudio] = Field(default_factory=list)
+    provider_candidate_count: int | None = Field(default=None, ge=0)
+    retention_limit: Literal[1, 2] | None = None
+    retained_candidate_count: int | None = Field(default=None, ge=0)
     error: dict[str, object] | None = None
     poll_interval_seconds: float | None = None
     max_wait_seconds: float | None = None
@@ -260,12 +286,20 @@ class SunoLog(StrictModel):
     local_media: list[dict[str, str]] = Field(default_factory=list)
 
 
+class KnowledgeLog(StrictModel):
+    used: bool = False
+    catalog_indexed_at: datetime | None = None
+    references: list[KnowledgeReference] = Field(default_factory=list)
+    warnings: list[KnowledgeWarning] = Field(default_factory=list)
+
+
 class CollaborationLog(StrictModel):
     request_id: str
     user_request_summary: str
     artifacts: dict[str, str] = Field(default_factory=dict)
     steps: list[CollaborationStep] = Field(default_factory=list)
     validation: ValidationLog = Field(default_factory=ValidationLog)
+    knowledge: KnowledgeLog = Field(default_factory=KnowledgeLog)
     suno: SunoLog = Field(default_factory=SunoLog)
 
 

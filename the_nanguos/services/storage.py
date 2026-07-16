@@ -5,6 +5,7 @@ import ipaddress
 import json
 import os
 import re
+import shutil
 import socket
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -36,6 +37,19 @@ class ArtifactStore:
             raise ValueError("invalid request_id")
         return self.outputs_dir / request_id
 
+    def delete_request(self, request_id: str) -> None:
+        target = self.request_dir(request_id)
+        root = self.outputs_dir.resolve()
+        if target.is_symlink():
+            raise ValueError("request directory must not be a symbolic link")
+        resolved = target.resolve(strict=False)
+        if resolved == root or resolved.parent != root:
+            raise ValueError("request directory is outside outputs root")
+        if resolved.exists():
+            if not resolved.is_dir():
+                raise ValueError("request path must be a directory")
+            shutil.rmtree(resolved)
+
     def write_json(self, request_id: str, name: str, value: BaseModel | dict) -> Path:
         if name not in {"song_spec.json", "score_plan.json", "suno_request.json", "collaboration_log.json"}:
             raise ValueError("unsupported artifact name")
@@ -59,26 +73,35 @@ class ArtifactStore:
         target = self.request_dir(request_id) / kind / f"{media_id}{extension}"
         target.parent.mkdir(parents=True, exist_ok=True)
         temporary = target.with_suffix(target.suffix + ".tmp")
-        total = 0
+        client = self._http or httpx.AsyncClient()
         try:
-            if self._http is not None:
-                context = self._http.stream("GET", url, timeout=self.timeout_seconds, follow_redirects=False)
-            else:
-                client = httpx.AsyncClient()
-                context = client.stream("GET", url, timeout=self.timeout_seconds, follow_redirects=False)
-            async with context as response:
-                response.raise_for_status()
-                with temporary.open("wb") as output:
-                    async for chunk in response.aiter_bytes():
-                        total += len(chunk)
-                        if total > self.max_media_bytes:
-                            raise MediaTooLargeError("media exceeds configured size limit")
-                        output.write(chunk)
-            os.replace(temporary, target)
-            return target
+            for attempt in range(3):
+                total = 0
+                try:
+                    async with client.stream(
+                        "GET",
+                        url,
+                        timeout=self.timeout_seconds,
+                        follow_redirects=False,
+                    ) as response:
+                        response.raise_for_status()
+                        with temporary.open("wb") as output:
+                            async for chunk in response.aiter_bytes():
+                                total += len(chunk)
+                                if total > self.max_media_bytes:
+                                    raise MediaTooLargeError("media exceeds configured size limit")
+                                output.write(chunk)
+                    os.replace(temporary, target)
+                    return target
+                except httpx.TransportError:
+                    temporary.unlink(missing_ok=True)
+                    if attempt == 2:
+                        raise
+                    await asyncio.sleep(0)
         finally:
-            if temporary.exists(): temporary.unlink()
-            if self._http is None and "client" in locals(): await client.aclose()
+            temporary.unlink(missing_ok=True)
+            if self._http is None:
+                await client.aclose()
 
     @staticmethod
     def _cover_extension(path: str) -> str:
