@@ -29,3 +29,15 @@ knowledge/_index/
 /docs/_drafts/
 
 7-Agent-lab.pdf
+
+# Local experiment-report work is excluded from repository history.
+/docs/report/
+/docs/planning/designs/*agent-lab-report*.md
+/docs/planning/designs/*agent-report*.md
+/docs/planning/work-units/WU-REPORT-*.md
+/experiments/__init__.py
+/experiments/report/
+/tests/test_report_evidence.py
+/output/pdf/
+/tmp/pdfs/
+/code/
